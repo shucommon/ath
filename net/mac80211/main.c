@@ -643,7 +643,7 @@ struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
 	skb_queue_head_init(&local->skb_queue);
 	skb_queue_head_init(&local->skb_queue_unreliable);
 
-	ieee80211_led_names(local);
+	ieee80211_alloc_led_names(local);
 
 	ieee80211_roc_setup(local);
 
@@ -768,8 +768,11 @@ static int ieee80211_init_cipher_suites(struct ieee80211_local *local)
 			suites[w++] = WLAN_CIPHER_SUITE_BIP_GMAC_256;
 		}
 
-		for (r = 0; r < local->hw.n_cipher_schemes; r++)
+		for (r = 0; r < local->hw.n_cipher_schemes; r++) {
 			suites[w++] = cs[r].cipher;
+			if (WARN_ON(cs[r].pn_len > IEEE80211_MAX_PN_LEN))
+				return -EINVAL;
+		}
 	}
 
 	local->hw.wiphy->cipher_suites = suites;
@@ -1206,6 +1209,8 @@ void ieee80211_free_hw(struct ieee80211_hw *hw)
 	idr_destroy(&local->ack_status_frames);
 
 	sta_info_stop(local);
+
+	ieee80211_free_led_names(local);
 
 	wiphy_free(local->hw.wiphy);
 }

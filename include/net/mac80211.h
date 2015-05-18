@@ -1501,6 +1501,47 @@ struct ieee80211_key_conf {
 	u8 key[0];
 };
 
+#define IEEE80211_MAX_PN_LEN	16
+
+/**
+ * struct ieee80211_key_seq - key sequence counter
+ *
+ * @tkip: TKIP data, containing IV32 and IV16 in host byte order
+ * @ccmp: PN data, most significant byte first (big endian,
+ *	reverse order than in packet)
+ * @aes_cmac: PN data, most significant byte first (big endian,
+ *	reverse order than in packet)
+ * @aes_gmac: PN data, most significant byte first (big endian,
+ *	reverse order than in packet)
+ * @gcmp: PN data, most significant byte first (big endian,
+ *	reverse order than in packet)
+ * @hw: data for HW-only (e.g. cipher scheme) keys
+ */
+struct ieee80211_key_seq {
+	union {
+		struct {
+			u32 iv32;
+			u16 iv16;
+		} tkip;
+		struct {
+			u8 pn[6];
+		} ccmp;
+		struct {
+			u8 pn[6];
+		} aes_cmac;
+		struct {
+			u8 pn[6];
+		} aes_gmac;
+		struct {
+			u8 pn[6];
+		} gcmp;
+		struct {
+			u8 seq[IEEE80211_MAX_PN_LEN];
+			u8 seq_len;
+		} hw;
+	};
+};
+
 /**
  * struct ieee80211_cipher_scheme - cipher scheme
  *
@@ -1687,6 +1728,8 @@ struct ieee80211_tx_control {
  * @sta: station table entry, %NULL for per-vif queue
  * @tid: the TID for this queue (unused for per-vif queue)
  * @ac: the AC for this queue
+ * @drv_priv: data area for driver use, will always be aligned to
+ *	sizeof(void *).
  *
  * The driver can obtain packets from this queue by calling
  * ieee80211_tx_dequeue().
@@ -2836,9 +2879,9 @@ enum ieee80211_reconfig_type {
  * 	Returns zero if statistics are available.
  *	The callback can sleep.
  *
- * @get_tkip_seq: If your device implements TKIP encryption in hardware this
- *	callback should be provided to read the TKIP transmit IVs (both IV32
- *	and IV16) for the given key from hardware.
+ * @get_key_seq: If your device implements encryption in hardware and does
+ *	IV/PN assignment then this callback should be provided to read the
+ *	IV/PN for the given key from hardware.
  *	The callback must be atomic.
  *
  * @set_frag_threshold: Configuration of fragmentation threshold. Assign this
@@ -3237,8 +3280,9 @@ struct ieee80211_ops {
 				 struct ieee80211_vif *vif);
 	int (*get_stats)(struct ieee80211_hw *hw,
 			 struct ieee80211_low_level_stats *stats);
-	void (*get_tkip_seq)(struct ieee80211_hw *hw, u8 hw_key_idx,
-			     u32 *iv32, u16 *iv16);
+	void (*get_key_seq)(struct ieee80211_hw *hw,
+			    struct ieee80211_key_conf *key,
+			    struct ieee80211_key_seq *seq);
 	int (*set_frag_threshold)(struct ieee80211_hw *hw, u32 value);
 	int (*set_rts_threshold)(struct ieee80211_hw *hw, u32 value);
 	int (*sta_add)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
@@ -3486,14 +3530,15 @@ enum ieee80211_tpt_led_trigger_flags {
 };
 
 #ifdef CONFIG_MAC80211_LEDS
-char *__ieee80211_get_tx_led_name(struct ieee80211_hw *hw);
-char *__ieee80211_get_rx_led_name(struct ieee80211_hw *hw);
-char *__ieee80211_get_assoc_led_name(struct ieee80211_hw *hw);
-char *__ieee80211_get_radio_led_name(struct ieee80211_hw *hw);
-char *__ieee80211_create_tpt_led_trigger(struct ieee80211_hw *hw,
-					 unsigned int flags,
-					 const struct ieee80211_tpt_blink *blink_table,
-					 unsigned int blink_table_len);
+const char *__ieee80211_get_tx_led_name(struct ieee80211_hw *hw);
+const char *__ieee80211_get_rx_led_name(struct ieee80211_hw *hw);
+const char *__ieee80211_get_assoc_led_name(struct ieee80211_hw *hw);
+const char *__ieee80211_get_radio_led_name(struct ieee80211_hw *hw);
+const char *
+__ieee80211_create_tpt_led_trigger(struct ieee80211_hw *hw,
+				   unsigned int flags,
+				   const struct ieee80211_tpt_blink *blink_table,
+				   unsigned int blink_table_len);
 #endif
 /**
  * ieee80211_get_tx_led_name - get name of TX LED
@@ -3507,7 +3552,7 @@ char *__ieee80211_create_tpt_led_trigger(struct ieee80211_hw *hw,
  *
  * Return: The name of the LED trigger. %NULL if not configured for LEDs.
  */
-static inline char *ieee80211_get_tx_led_name(struct ieee80211_hw *hw)
+static inline const char *ieee80211_get_tx_led_name(struct ieee80211_hw *hw)
 {
 #ifdef CONFIG_MAC80211_LEDS
 	return __ieee80211_get_tx_led_name(hw);
@@ -3528,7 +3573,7 @@ static inline char *ieee80211_get_tx_led_name(struct ieee80211_hw *hw)
  *
  * Return: The name of the LED trigger. %NULL if not configured for LEDs.
  */
-static inline char *ieee80211_get_rx_led_name(struct ieee80211_hw *hw)
+static inline const char *ieee80211_get_rx_led_name(struct ieee80211_hw *hw)
 {
 #ifdef CONFIG_MAC80211_LEDS
 	return __ieee80211_get_rx_led_name(hw);
@@ -3549,7 +3594,7 @@ static inline char *ieee80211_get_rx_led_name(struct ieee80211_hw *hw)
  *
  * Return: The name of the LED trigger. %NULL if not configured for LEDs.
  */
-static inline char *ieee80211_get_assoc_led_name(struct ieee80211_hw *hw)
+static inline const char *ieee80211_get_assoc_led_name(struct ieee80211_hw *hw)
 {
 #ifdef CONFIG_MAC80211_LEDS
 	return __ieee80211_get_assoc_led_name(hw);
@@ -3570,7 +3615,7 @@ static inline char *ieee80211_get_assoc_led_name(struct ieee80211_hw *hw)
  *
  * Return: The name of the LED trigger. %NULL if not configured for LEDs.
  */
-static inline char *ieee80211_get_radio_led_name(struct ieee80211_hw *hw)
+static inline const char *ieee80211_get_radio_led_name(struct ieee80211_hw *hw)
 {
 #ifdef CONFIG_MAC80211_LEDS
 	return __ieee80211_get_radio_led_name(hw);
@@ -3591,7 +3636,7 @@ static inline char *ieee80211_get_radio_led_name(struct ieee80211_hw *hw)
  *
  * Note: This function must be called before ieee80211_register_hw().
  */
-static inline char *
+static inline const char *
 ieee80211_create_tpt_led_trigger(struct ieee80211_hw *hw, unsigned int flags,
 				 const struct ieee80211_tpt_blink *blink_table,
 				 unsigned int blink_table_len)
@@ -4270,40 +4315,6 @@ void ieee80211_get_tkip_p2k(struct ieee80211_key_conf *keyconf,
  */
 void ieee80211_aes_cmac_calculate_k1_k2(struct ieee80211_key_conf *keyconf,
 					u8 *k1, u8 *k2);
-
-/**
- * struct ieee80211_key_seq - key sequence counter
- *
- * @tkip: TKIP data, containing IV32 and IV16 in host byte order
- * @ccmp: PN data, most significant byte first (big endian,
- *	reverse order than in packet)
- * @aes_cmac: PN data, most significant byte first (big endian,
- *	reverse order than in packet)
- * @aes_gmac: PN data, most significant byte first (big endian,
- *	reverse order than in packet)
- * @gcmp: PN data, most significant byte first (big endian,
- *	reverse order than in packet)
- */
-struct ieee80211_key_seq {
-	union {
-		struct {
-			u32 iv32;
-			u16 iv16;
-		} tkip;
-		struct {
-			u8 pn[6];
-		} ccmp;
-		struct {
-			u8 pn[6];
-		} aes_cmac;
-		struct {
-			u8 pn[6];
-		} aes_gmac;
-		struct {
-			u8 pn[6];
-		} gcmp;
-	};
-};
 
 /**
  * ieee80211_get_key_tx_seq - get key TX sequence counter
