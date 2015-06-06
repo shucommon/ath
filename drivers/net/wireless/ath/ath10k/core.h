@@ -91,6 +91,7 @@ struct ath10k_skb_cb {
 		u8 tid;
 		u16 freq;
 		bool is_offchan;
+		bool nohwcrypt;
 		struct ath10k_htt_txbuf *txbuf;
 		u32 txbuf_paddr;
 	} __packed htt;
@@ -340,6 +341,7 @@ struct ath10k_vif {
 	} u;
 
 	bool use_cts_prot;
+	bool nohwcrypt;
 	int num_legacy_stations;
 	int txpower;
 	struct wmi_wmm_params_all_arg wmm_params;
@@ -452,15 +454,20 @@ enum ath10k_fw_features {
 	ATH10K_FW_FEATURE_WOWLAN_SUPPORT = 6,
 
 	/* Don't trust error code from otp.bin */
-	ATH10K_FW_FEATURE_IGNORE_OTP_RESULT,
+	ATH10K_FW_FEATURE_IGNORE_OTP_RESULT = 7,
 
 	/* Some firmware revisions pad 4th hw address to 4 byte boundary making
 	 * it 8 bytes long in Native Wifi Rx decap.
 	 */
-	ATH10K_FW_FEATURE_NO_NWIFI_DECAP_4ADDR_PADDING,
+	ATH10K_FW_FEATURE_NO_NWIFI_DECAP_4ADDR_PADDING = 8,
 
 	/* Firmware supports bypassing PLL setting on init. */
 	ATH10K_FW_FEATURE_SUPPORTS_SKIP_CLOCK_INIT = 9,
+
+	/* Raw mode support. If supported, FW supports receiving and trasmitting
+	 * frames in raw mode
+	 */
+	ATH10K_FW_FEATURE_RAW_MODE_SUPPORT = 10,
 
 	/* keep last */
 	ATH10K_FW_FEATURE_COUNT,
@@ -475,12 +482,30 @@ enum ath10k_dev_flags {
 	 * waiters should immediately cancel instead of waiting for a time out.
 	 */
 	ATH10K_FLAG_CRASH_FLUSH,
+
+	/* Use Raw mode instead of native WiFi Tx/Rx encap mode.
+	 * Raw mode supports both HW and SW crypto. Native WiFi only
+	 * supports HW crypto.
+	 */
+	ATH10K_FLAG_RAW_MODE,
+
+	/* Disable HW crypto engine */
+	ATH10K_FLAG_HW_CRYPTO_DISABLED,
 };
 
 enum ath10k_cal_mode {
 	ATH10K_CAL_MODE_FILE,
 	ATH10K_CAL_MODE_OTP,
 	ATH10K_CAL_MODE_DT,
+};
+
+enum ath10k_crypt_mode {
+	/* Use HW crypto engine only */
+	ATH10K_CRYPT_MODE_HW,
+	/* HW SW crypto engine only (ie. HW crypto engine disabled) */
+	ATH10K_CRYPT_MODE_SW,
+	/* Both SW & HW crypto engine supported */
+	ATH10K_CRYPT_MODE_HW_SW,
 };
 
 static inline const char *ath10k_cal_mode_str(enum ath10k_cal_mode mode)

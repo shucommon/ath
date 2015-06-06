@@ -172,6 +172,7 @@ static int ath10k_send_key(struct ath10k_vif *arvif,
 		.key_flags = flags,
 		.macaddr = macaddr,
 	};
+	int ret;
 
 	lockdep_assert_held(&arvif->ar->conf_mutex);
 
@@ -197,12 +198,23 @@ static int ath10k_send_key(struct ath10k_vif *arvif,
 		return -EOPNOTSUPP;
 	}
 
+	if (test_bit(ATH10K_FLAG_RAW_MODE, &ar->dev_flags)) {
+		key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
+	}
+
+	if (arvif->nohwcrypt)
+		cmd = DISABLE_KEY;
+
 	if (cmd == DISABLE_KEY) {
 		arg.key_cipher = WMI_CIPHER_NONE;
 		arg.key_data = NULL;
 	}
 
-	return ath10k_wmi_vdev_install_key(arvif->ar, &arg);
+	ret = ath10k_wmi_vdev_install_key(arvif->ar, &arg);
+
+	if (arvif->nohwcrypt && !ret)
+		return -EOPNOTSUPP;
+	return ret;
 }
 
 static int ath10k_install_key(struct ath10k_vif *arvif,
@@ -3172,7 +3184,22 @@ ath10k_tx_h_get_txmode(struct ath10k *ar, struct ieee80211_vif *vif,
 	if (ieee80211_is_data_present(fc) && sta && sta->tdls)
 		return ATH10K_HW_TXRX_ETHERNET;
 
+	if (test_bit(ATH10K_FLAG_RAW_MODE, &ar->dev_flags))
+		return ATH10K_HW_TXRX_RAW;
+
 	return ATH10K_HW_TXRX_NATIVE_WIFI;
+}
+
+static bool ath10k_tx_h_use_hwcrypto(struct ieee80211_vif *vif,
+				     struct sk_buff *skb) {
+	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+	const u32 mask = IEEE80211_TX_INTFL_DONT_ENCRYPT |
+			 IEEE80211_TX_CTL_INJECTED;
+	if ((info->flags & mask) == mask)
+		return false;
+	if (vif)
+		return !ath10k_vif_to_arvif(vif)->nohwcrypt;
+	return true;
 }
 
 /* HTT Tx uses Native Wifi tx mode which expects 802.11 frames without QoS
@@ -3620,6 +3647,7 @@ static void ath10k_tx(struct ieee80211_hw *hw,
 	ATH10K_SKB_CB(skb)->htt.is_offchan = false;
 	ATH10K_SKB_CB(skb)->htt.freq = 0;
 	ATH10K_SKB_CB(skb)->htt.tid = ath10k_tx_h_get_tid(hdr);
+	ATH10K_SKB_CB(skb)->htt.nohwcrypt = !ath10k_tx_h_use_hwcrypto(vif, skb);
 	ATH10K_SKB_CB(skb)->vdev_id = ath10k_tx_h_get_vdev_id(ar, vif);
 	ATH10K_SKB_CB(skb)->txmode = ath10k_tx_h_get_txmode(ar, vif, sta, skb);
 	ATH10K_SKB_CB(skb)->is_protected = ieee80211_has_protected(fc);
@@ -3635,12 +3663,11 @@ static void ath10k_tx(struct ieee80211_hw *hw,
 		ath10k_tx_h_8023(skb);
 		break;
 	case ATH10K_HW_TXRX_RAW:
-		/* FIXME: Packet injection isn't implemented. It should be
-		 * doable with firmware 10.2 on qca988x.
-		 */
-		WARN_ON_ONCE(1);
-		ieee80211_free_txskb(hw, skb);
-		return;
+		if (!test_bit(ATH10K_FLAG_RAW_MODE, &ar->dev_flags)) {
+			WARN_ON_ONCE(1);
+			ieee80211_free_txskb(hw, skb);
+			return;
+		}
 	}
 
 	if (info->flags & IEEE80211_TX_CTL_TX_OFFCHAN) {
@@ -4158,6 +4185,14 @@ static int ath10k_add_interface(struct ieee80211_hw *hw,
 				    ret);
 			goto err;
 		}
+	}
+	if (test_bit(ATH10K_FLAG_HW_CRYPTO_DISABLED, &ar->dev_flags))
+		arvif->nohwcrypt = true;
+
+	if (arvif->nohwcrypt &&
+	    !test_bit(ATH10K_FLAG_RAW_MODE, &ar->dev_flags)) {
+		ath10k_warn(ar, "cryptmode module param needed for sw crypto\n");
+		goto err;
 	}
 
 	ath10k_dbg(ar, ATH10K_DBG_MAC, "mac vdev create %d (add interface) type %d subtype %d bcnmode %s\n",
@@ -6844,13 +6879,15 @@ int ath10k_mac_register(struct ath10k *ar)
 			IEEE80211_HW_HAS_RATE_CONTROL |
 			IEEE80211_HW_AP_LINK_PS |
 			IEEE80211_HW_SPECTRUM_MGMT |
-			IEEE80211_HW_SW_CRYPTO_CONTROL |
-			IEEE80211_HW_SUPPORT_FAST_XMIT |
 			IEEE80211_HW_CONNECTION_MONITOR |
 			IEEE80211_HW_SUPPORTS_PER_STA_GTK |
 			IEEE80211_HW_WANT_MONITOR_VIF |
 			IEEE80211_HW_CHANCTX_STA_CSA |
-			IEEE80211_HW_QUEUE_CONTROL;
+			IEEE80211_HW_QUEUE_CONTROL |
+			IEEE80211_HW_SUPPORT_FAST_XMIT;
+
+	if (!test_bit(ATH10K_FLAG_RAW_MODE, &ar->dev_flags))
+		ar->hw->flags |= IEEE80211_HW_SW_CRYPTO_CONTROL;
 
 	ar->hw->wiphy->features |= NL80211_FEATURE_STATIC_SMPS;
 	ar->hw->wiphy->flags |= WIPHY_FLAG_IBSS_RSN;
